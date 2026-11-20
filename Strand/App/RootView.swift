@@ -475,10 +475,9 @@ struct RootView: View {
         NavigationStack {
             // Today's root-level links push TabRoute VALUES (#198), so this stack must register
             // their destinations (once per stack — a double registration double-pushes, #38).
-            Group {
-                if liquidTodayEnabled { LiquidTodayView() } else { TodayView() }
-            }
-            .tabRouteDestinations()
+            // Zhoop: Today is the weight-loss screen, the same one the iPhone app shows.
+            CutTodayView()
+                .tabRouteDestinations()
         }
         #else
         TodayView()

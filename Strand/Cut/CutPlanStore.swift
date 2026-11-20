@@ -191,12 +191,22 @@ final class CutPlanStore: ObservableObject {
     }
 
     /// Daily deficit to go from `weightKg` to `goalKg` by `date` (0 once the goal is reached).
+    /// In the final week, and once the date has passed, the plan stops squeezing what's left into the
+    /// days remaining (which would ask for thousands of kcal a day) and holds a sustainable pace instead.
     static func requiredDeficit(weightKg: Double, goalKg: Double, by date: Date, now: Date = Date()) -> Double {
         let cal = Calendar.current
-        let days = max(1, cal.dateComponents([.day], from: cal.startOfDay(for: now),
-                                             to: cal.startOfDay(for: date)).day ?? 1)
-        return max(0, weightKg - goalKg) * kcalPerKgFat / Double(days)
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: now),
+                                      to: cal.startOfDay(for: date)).day ?? 0
+        let toLose = max(0, weightKg - goalKg) * kcalPerKgFat
+        let byDate = toLose / Double(max(days, 1))
+        return days < 7 ? min(byDate, sustainableDeficit(weightKg: weightKg)) : byDate
     }
+
+    /// About 1% of body weight a week, as kcal/day: the pace used once the target date is close or gone.
+    static func sustainableDeficit(weightKg: Double) -> Double { weightKg * 0.01 * kcalPerKgFat / 7 }
+
+    /// True once the target date is before today.
+    var targetDatePassed: Bool { Calendar.current.startOfDay(for: targetDate) < Calendar.current.startOfDay(for: Date()) }
 
     /// Predicted date the goal is reached if the average daily deficit continues. nil when not losing.
     func projectedGoalDate(currentKg: Double, avgDailyDeficit: Double, from now: Date = Date()) -> Date? {

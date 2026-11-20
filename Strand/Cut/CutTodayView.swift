@@ -21,6 +21,11 @@ struct CutTodayView: View {
     @State private var showGoal = false
     @State private var showSettings = false
     @State private var showHealth = false
+    /// The app's own first-run gates (same keys as iOSRootView); setup waits until both are done.
+    @AppStorage("noop.onboarded") private var onboarded = false
+    @AppStorage("noop.acceptedTermsVersion") private var acceptedTerms = ""
+
+    private var needsSetup: Bool { !plan.configured && onboarded && acceptedTerms == Terms.currentVersion }
 
     private var dayKey: String { Repository.localDayKey(Date()) }
     private var male: Bool { profile.sex != "female" }
@@ -63,37 +68,42 @@ struct CutTodayView: View {
             }
         }
         .task {
-            seedPlanIfNeeded()
             while !Task.isCancelled {
                 await load()
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
             }
         }
-        .sheet(isPresented: $showAddFood) { AddFoodSheet(day: dayKey) }
-        .sheet(isPresented: $showWeight) { LogWeightSheet() }
-        .sheet(isPresented: $showPlan) { CutPlanSheet() }
-        .sheet(isPresented: $showGoal) { GoalSheet(currentKg: estimate.kg) }
+        // First launch: ask for the wearer's own numbers before any calorie figure is shown.
+        .sheet(isPresented: Binding(get: { needsSetup }, set: { _ in })) {
+            SetupSheet(onDone: { Task { await load() } }).cutSheetLayout()
+        }
+        .sheet(isPresented: $showAddFood) { AddFoodSheet(day: dayKey).cutSheetLayout() }
+        .sheet(isPresented: $showWeight) { LogWeightSheet().cutSheetLayout() }
+        .sheet(isPresented: $showPlan) { CutPlanSheet().cutSheetLayout() }
+        .sheet(isPresented: $showGoal) { GoalSheet(currentKg: estimate.kg).cutSheetLayout() }
         .sheet(isPresented: $showHealth, onDismiss: { Task { await load() } }) {
             NavigationStack {
                 AppleHealthView()
-                    .navigationBarTitleDisplayMode(.inline)
+                    .cutInlineTitle()
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
+                        ToolbarItem(placement: .cutTrailing) {
                             Button("Done") { showHealth = false }.foregroundStyle(StrandPalette.accent)
                         }
                     }
             }
+            .cutSheetLayout()
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack {
                 SettingsView()
-                    .navigationBarTitleDisplayMode(.inline)
+                    .cutInlineTitle()
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
+                        ToolbarItem(placement: .cutTrailing) {
                             Button("Done") { showSettings = false }.foregroundStyle(StrandPalette.accent)
                         }
                     }
             }
+            .cutSheetLayout()
         }
     }
 
@@ -170,7 +180,7 @@ struct CutTodayView: View {
                         .padding(.vertical, NoopMetrics.space2)
                 }
                 .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
+                .cutCapsuleShape()
                 .tint(StrandPalette.accent)
             }
         }
@@ -444,7 +454,7 @@ struct CutTodayView: View {
                         .font(StrandFont.subhead).frame(maxWidth: .infinity).padding(.vertical, NoopMetrics.space1)
                 }
                 .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+                .cutCapsuleShape()
                 .tint(StrandPalette.accent)
             }
         }
@@ -488,6 +498,7 @@ struct CutTodayView: View {
         let when = eta.map { $0.formatted(.dateTime.day().month(.abbreviated)) } ?? ""
         let (text, tint): (String, Color) = {
             if current <= plan.goalKg { return ("Done. Set a new goal any time.", good) }
+            if plan.targetDatePassed { return ("Goal date passed: tap Edit to set a new one", StrandPalette.statusWarning) }
             if p.fromPlan { return ("Log 2 full days to see if you're on track", StrandPalette.textTertiary) }
             guard let late else { return ("Not losing lately: eat less or move more", bad) }
             if late <= 0 { return ("On track: you'll get there \(when)", good) }
@@ -556,20 +567,6 @@ struct CutTodayView: View {
 
     // MARK: Data
 
-    /// First launch: write the owner's stated numbers into the profile once, so every estimate
-    /// (calories, HR zones) uses them. Editable afterwards under Edit plan.
-    private func seedPlanIfNeeded() {
-        guard !plan.configured else { return }
-        profile.weightKg = 83.3
-        profile.heightCm = 180
-        profile.sex = "male"
-        profile.dateOfBirth = ProfileStore.dateOfBirth(forAge: 24)
-        plan.startKg = 83.3
-        plan.startDay = dayKey
-        plan.goalKg = 75
-        plan.configured = true
-    }
-
     private func load() async {
         // No scale: the start-of-day estimate IS the weight every calculation uses (BMR, allowance,
         // strap calorie estimates). Rounded to 0.1 kg so it doesn't churn.
@@ -636,10 +633,10 @@ private struct AddFoodSheet: View {
                 Section {
                     TextField("What did you eat? (optional)", text: $name)
                     TextField("Calories", text: $kcal)
-                        .keyboardType(.numberPad)
+                        .cutNumberKeyboard()
                         .focused($kcalFocused)
                     TextField("Protein, g (optional)", text: $protein)
-                        .keyboardType(.decimalPad)
+                        .cutDecimalKeyboard()
                 }
                 let recent = plan.recentFoods()
                 if !recent.isEmpty {
@@ -661,7 +658,7 @@ private struct AddFoodSheet: View {
                 }
             }
             .navigationTitle("Add food")
-            .navigationBarTitleDisplayMode(.inline)
+            .cutInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -689,7 +686,7 @@ private struct LogWeightSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Weight (kg)", text: $kg).keyboardType(.decimalPad)
+                    TextField("Weight (kg)", text: $kg).cutDecimalKeyboard()
                 } footer: {
                     Text("Optional. If you weigh yourself somewhere, enter it here and the estimate restarts from it.")
                 }
@@ -706,7 +703,7 @@ private struct LogWeightSheet: View {
                 }
             }
             .navigationTitle("Set weight")
-            .navigationBarTitleDisplayMode(.inline)
+            .cutInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -790,7 +787,7 @@ private struct CutPlanSheet: View {
                 }
             }
             .navigationTitle("Plan")
-            .navigationBarTitleDisplayMode(.inline)
+            .cutInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
@@ -807,6 +804,103 @@ private struct CutPlanSheet: View {
             Spacer()
             Text(value).foregroundStyle(StrandPalette.textSecondary)
         }
+    }
+}
+
+/// First-launch setup: the wearer's own body numbers and goal, which every calorie figure depends on.
+/// Shown until saved; everything here is editable later under Plan settings and Goal.
+private struct SetupSheet: View {
+    let onDone: () -> Void
+    @EnvironmentObject var profile: ProfileStore
+    @ObservedObject private var plan = CutPlanStore.shared
+    @State private var weight = ""
+    @State private var height = ""
+    @State private var age = 30
+    @State private var sex = "male"
+    @State private var goal = ""
+    @State private var date = Calendar.current.date(byAdding: .day, value: 90, to: Date()) ?? Date()
+    @State private var share = 0.3
+
+    private static var earliest: Date { Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date() }
+
+    private func num(_ s: String) -> Double? { Double(s.replacingOccurrences(of: ",", with: ".")) }
+    private var weightKg: Double? { num(weight).flatMap { $0 > 20 && $0 < 400 ? $0 : nil } }
+    private var heightCm: Double? { num(height).flatMap { $0 >= 120 && $0 <= 230 ? $0 : nil } }
+    private var goalKg: Double? {
+        guard let w = weightKg, let g = num(goal), g >= 40, g < w else { return nil }
+        return g
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    numberRow("Current weight", "kg", $weight)
+                    numberRow("Height", "cm", $height)
+                    Stepper(value: $age, in: 14...100) {
+                        HStack { Text("Age"); Spacer(); Text("\(age)").foregroundStyle(StrandPalette.textSecondary) }
+                    }
+                    Picker("Sex", selection: $sex) {
+                        Text("Male").tag("male")
+                        Text("Female").tag("female")
+                    }
+                } header: {
+                    Text("You")
+                } footer: {
+                    Text("Used to estimate how many calories you burn. A best guess at your weight is fine; you can correct it any time.")
+                }
+                Section("Goal") {
+                    numberRow("Goal weight", "kg", $goal)
+                    DatePicker("By", selection: $date, in: Self.earliest..., displayedComponents: .date)
+                    Picker("Deficit from", selection: $share) {
+                        Text("Food only").tag(0.0)
+                        Text("80% food · 20% workout").tag(0.2)
+                        Text("70% food · 30% workout").tag(0.3)
+                        Text("60% food · 40% workout").tag(0.4)
+                        Text("50% food · 50% workout").tag(0.5)
+                    }
+                }
+            }
+            .navigationTitle("Set up Zhoop")
+            .cutInlineTitle()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Start") { save() }
+                        .disabled(weightKg == nil || heightCm == nil || goalKg == nil)
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+        .onAppear {
+            if profile.heightCm >= 120 { height = String(format: "%.0f", profile.heightCm) }
+            if (14...100).contains(profile.age) { age = profile.age }
+            sex = profile.sex == "female" ? "female" : "male"
+        }
+    }
+
+    private func numberRow(_ label: String, _ unit: String, _ text: Binding<String>) -> some View {
+        HStack {
+            Text(label)
+            TextField("0", text: text)
+                .cutDecimalKeyboard()
+                .multilineTextAlignment(.trailing)
+            Text(unit).foregroundStyle(StrandPalette.textSecondary)
+        }
+    }
+
+    private func save() {
+        guard let w = weightKg, let h = heightCm, let g = goalKg else { return }
+        profile.weightKg = w
+        profile.heightCm = h
+        profile.sex = sex
+        profile.dateOfBirth = ProfileStore.dateOfBirth(forAge: age)
+        plan.startKg = w
+        plan.startDay = Repository.localDayKey(Date())
+        plan.goalKg = g
+        plan.targetDate = date
+        plan.workoutShare = share
+        plan.configured = true
+        onDone()
     }
 }
 
@@ -888,7 +982,7 @@ struct GoalSheet: View {
             }
             .background(StrandPalette.surfaceBase.ignoresSafeArea())
             .navigationTitle("Goal")
-            .navigationBarTitleDisplayMode(.inline)
+            .cutInlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -925,5 +1019,59 @@ struct GoalSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Cross-platform chrome
+
+// These screens compile into both the iPhone and Mac apps; the iOS-only modifiers are wrapped here.
+extension View {
+    /// macOS sheets have no natural size and its default Form style lays rows out in a label column
+    /// that pushed these forms off the sheet's edge; give them a size and the grouped (iOS-like) style.
+    @ViewBuilder func cutSheetLayout() -> some View {
+        #if os(macOS)
+        formStyle(.grouped)
+            .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 680)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder func cutInlineTitle() -> some View {
+        #if os(iOS)
+        navigationBarTitleDisplayMode(.inline)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder func cutNumberKeyboard() -> some View {
+        #if os(iOS)
+        keyboardType(.numberPad)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder func cutDecimalKeyboard() -> some View {
+        #if os(iOS)
+        keyboardType(.decimalPad)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder func cutCapsuleShape() -> some View {
+        if #available(macOS 14.0, iOS 17.0, *) { buttonBorderShape(.capsule) } else { self }
+    }
+}
+
+extension ToolbarItemPlacement {
+    static var cutTrailing: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarTrailing
+        #else
+        .confirmationAction
+        #endif
     }
 }
